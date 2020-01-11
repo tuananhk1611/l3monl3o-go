@@ -5,42 +5,59 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"strconv"
 	"strings"
 )
 
 type Post struct {
-	Id       int    `json:"id"`
+	Id       int64  `json:"id"`
 	Name     string `json:"name"`
 	Password string `json:"password"`
 }
 
-func Get(c *gin.Context) {
+var Table = "user"
 
+func Get(c *gin.Context) {
 	db := database.DBConn()
-	rows, err := db.Query("SELECT id, name, password FROM user WHERE id = " + c.Param("id"))
+	getId, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	defer db.Close() // close database connect after complete all action
 	if err != nil {
 		c.JSON(500, gin.H{
+			"messages": "Cannot parse id",
+		})
+		return
+	}
+	if getId <= 0 {
+		c.JSON(200, gin.H{
+			"messages": "Id not found or not valid",
+		})
+		return
+	}
+	rows, err := db.Query("SELECT * FROM user WHERE id = " + c.Param("id"))
+	if err != nil {
+		c.JSON(404, gin.H{
 			"messages": "Object not found",
 		})
+		return
 	}
-
-	post := Post{}
-
+	rs := Post{}
+	defer rows.Close()
 	for rows.Next() {
-		var id int
-		var name string
+		var id int64
+		var name, password string
 
-		err = rows.Scan(&id, &name)
+		err = rows.Scan(&id, &name, &password)
 		if err != nil {
 			panic(err.Error())
+			return
 		}
 
-		post.Id = id
-		post.Name = name
+		rs.Id = id
+		rs.Name = name
+		rs.Password = password
 	}
 
-	c.JSON(200, post)
-	defer db.Close() // close database connect after complete all action
+	c.JSON(200, rs)
 }
 
 func Create(c *gin.Context) {
@@ -53,47 +70,40 @@ func Create(c *gin.Context) {
 		return
 	}
 	queryKey, queryValue := BuildQueryFromParams(params)
-	fmt.Println("test %v %v", queryKey, queryValue)
-	res, err := db.Prepare("INSERT INTO user(" + queryKey + ") VALUES(?,?)")
+	query := fmt.Sprintf(`INSERT INTO %v (%v) VALUES (%v)`, Table, queryKey, queryValue)
+	_, err = db.Exec(query)
 	if err != nil {
 		c.JSON(500, gin.H{
 			"messages": "Internal serve 500",
 		})
-	}
-	_, err = res.Exec(params.Name, params.Password)
-	if err != nil {
-		panic(err.Error())
 		return
 	}
-	c.JSON(200, res)
+	c.JSON(200, gin.H{
+		"messages": "inserted",
+	})
 }
 
 func Update(c *gin.Context) {
 	db := database.DBConn()
-	rows, err := db.Query("SELECT id, name FROM user WHERE id = " + c.Param("id"))
+	var params *Post
+	err := json.NewDecoder(c.Request.Body).Decode(&params)
+	defer db.Close() // close database connect after complete all action
+	if err != nil {
+		panic(err.Error())
+		return
+	}
+	queryKey, queryValue := BuildQueryFromParams(params)
+	query := fmt.Sprintf(`UPDATE %v SET %v (%v) VALUES (%v) WHERE id = `, Table, queryKey, queryValue)
+	_, err = db.Exec(query)
 	if err != nil {
 		c.JSON(500, gin.H{
-			"messages": "Object not found",
+			"messages": "Internal serve 500",
 		})
+		return
 	}
-
-	post := Post{}
-
-	for rows.Next() {
-		var id int
-		var name string
-
-		err = rows.Scan(&id, &name)
-		if err != nil {
-			panic(err.Error())
-		}
-
-		post.Id = id
-		post.Name = name
-	}
-
-	c.JSON(200, post)
-	defer db.Close() // close database connect after complete all action
+	c.JSON(200, gin.H{
+		"messages": "inserted",
+	})
 }
 
 func Delete(c *gin.Context) {
@@ -108,7 +118,7 @@ func Delete(c *gin.Context) {
 	post := Post{}
 
 	for rows.Next() {
-		var id int
+		var id int64
 		var name string
 
 		err = rows.Scan(&id, &name)
@@ -127,17 +137,13 @@ func Delete(c *gin.Context) {
 func BuildQueryFromParams(params *Post) (resKey string, resValue string) {
 	listKey := make([]string, 0)
 	listValue := make([]string, 0)
-	if params.Id != 0 {
-		listKey = append(listKey, "id")
-		listValue = append(listValue, string(params.Id))
-	}
 	if params.Name != "" {
 		listKey = append(listKey, "name")
-		listValue = append(listValue, string(params.Name))
+		listValue = append(listValue, "'"+string(params.Name)+"'")
 	}
 	if params.Password != "" {
 		listKey = append(listKey, "password")
-		listValue = append(listValue, string(params.Password))
+		listValue = append(listValue, "'"+string(params.Password)+"'")
 	}
 	resKey = strings.Join(listKey, ",")
 	resValue = strings.Join(listValue, ",")
